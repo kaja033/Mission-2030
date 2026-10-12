@@ -1,0 +1,183 @@
+  <script>
+    const TOTAL_TARGET = 22050000;
+    const TARGET_DATE = new Date("2030-01-01T00:00:00").getTime();
+    const STORAGE_KEY = "mission_2030_v2";
+    const WAITING_KEY = "mission_2030_wait_start";
+
+    let shiftMode = "24h";
+
+    // Safe storage helper (prevents iframe preview crashes)
+    function getStored(key, fallback) {
+      try {
+        const val = localStorage.getItem(key);
+        return val ? JSON.parse(val) : fallback;
+      } catch (e) {
+        return fallback;
+      }
+    }
+
+    function setStored(key, val) {
+      try {
+        localStorage.setItem(key, JSON.stringify(val));
+      } catch (e) {}
+    }
+
+    // Initialize 10-day waiting timestamp
+    let waitStart = getStored(WAITING_KEY, null);
+    if (!waitStart) {
+      waitStart = Date.now();
+      setStored(WAITING_KEY, waitStart);
+    }
+    const WAITING_END = Number(waitStart) + (10 * 24 * 60 * 60 * 1000);
+
+    let records = getStored(STORAGE_KEY, []);
+    
+    const dateInput = document.getElementById('in-date');
+    if (dateInput) dateInput.value = new Date().toISOString().split('T')[0];
+
+    function setMode(mode) {
+      shiftMode = mode;
+      document.getElementById('btn-24h').classList.toggle('active', mode === '24h');
+      document.getElementById('btn-8h').classList.toggle('active', mode === '8h');
+      tick();
+    }
+
+    function addQuick(id, val) {
+      const el = document.getElementById(id);
+      el.value = (Number(el.value) || 0) + val;
+    }
+
+    function tick() {
+      const now = Date.now();
+
+      // 1. 10-day Reverse Waiting Timer
+      const waitRemaining = WAITING_END - now;
+      if (waitRemaining > 0) {
+        const wd = Math.floor(waitRemaining / (1000 * 60 * 60 * 24));
+        const wh = Math.floor((waitRemaining % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+        const wm = Math.floor((waitRemaining % (1000 * 60 * 60)) / (1000 * 60));
+        const ws = Math.floor((waitRemaining % (1000 * 60)) / 1000);
+
+        document.getElementById('w-days').innerText = String(wd).padStart(2, '0');
+        document.getElementById('w-hours').innerText = String(wh).padStart(2, '0');
+        document.getElementById('w-mins').innerText = String(wm).padStart(2, '0');
+        document.getElementById('w-secs').innerText = String(ws).padStart(2, '0');
+        document.getElementById('waiting-status').className = "badge badge-wait";
+        document.getElementById('waiting-status').innerText = "⏳ WAITING ACTIVE";
+      } else {
+        document.getElementById('w-days').innerText = "00";
+        document.getElementById('w-hours').innerText = "00";
+        document.getElementById('w-mins').innerText = "00";
+        document.getElementById('w-secs').innerText = "00";
+        document.getElementById('waiting-status').className = "badge badge-live";
+        document.getElementById('waiting-status').innerText = "🚀 MISSION LIVE";
+      }
+
+      // 2. 2030 Countdown
+      const missionDiff = TARGET_DATE - now;
+      const totalDaysLeft = Math.max(1, Math.floor(missionDiff / (1000 * 60 * 60 * 24)));
+      const mh = Math.floor((missionDiff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+      const mm = Math.floor((missionDiff % (1000 * 60 * 60)) / (1000 * 60));
+      const ms = Math.floor((missionDiff % (1000 * 60)) / 1000);
+
+      document.getElementById('m-days').innerText = totalDaysLeft;
+      document.getElementById('m-hours').innerText = String(mh).padStart(2, '0');
+      document.getElementById('m-mins').innerText = String(mm).padStart(2, '0');
+      document.getElementById('m-secs').innerText = String(ms).padStart(2, '0');
+
+      // 3. Earning Pace Calculation
+      const waitDaysRemaining = waitRemaining > 0 ? Math.ceil(waitRemaining / (1000 * 60 * 60 * 24)) : 0;
+      const activeEarningDays = Math.max(1, totalDaysLeft - waitDaysRemaining);
+      document.getElementById('active-days-tag').innerText = `${activeEarningDays} active days after buffer`;
+
+      const netSaved = records.reduce((sum, r) => sum + (r.income - r.expense), 0);
+      const remainingTarget = Math.max(0, TOTAL_TARGET - netSaved);
+
+      const dailyRate = Math.round(remainingTarget / activeEarningDays);
+      const hourlyRate = shiftMode === '24h' ? Math.round(dailyRate / 24) : Math.round(dailyRate / 8);
+      const halfHourRate = shiftMode === '24h' ? Math.round(dailyRate / 48) : Math.round(dailyRate / 16);
+
+      document.getElementById('rate-day').innerText = "₹" + dailyRate.toLocaleString('en-IN');
+      document.getElementById('rate-hour').innerText = "₹" + hourlyRate.toLocaleString('en-IN');
+      document.getElementById('rate-half').innerText = "₹" + halfHourRate.toLocaleString('en-IN');
+
+      // 4. Progress Bar
+      document.getElementById('net-corpus').innerText = "₹" + netSaved.toLocaleString('en-IN');
+      const pct = Math.min(100, (netSaved / TOTAL_TARGET) * 100);
+      document.getElementById('progress-fill').style.width = pct + "%";
+      document.getElementById('progress-pct').innerText = pct.toFixed(2) + "%";
+    }
+
+    function saveRecord() {
+      const date = document.getElementById('in-date').value;
+      const income = Number(document.getElementById('in-income').value) || 0;
+      const expense = Number(document.getElementById('in-expense').value) || 0;
+      if (!date) return alert("Please select a date.");
+
+      records.unshift({ id: Date.now(), date, income, expense, net: (income - expense) });
+      setStored(STORAGE_KEY, records);
+
+      document.getElementById('in-income').value = "";
+      document.getElementById('in-expense').value = "";
+      renderLedger();
+      tick();
+    }
+
+    function deleteRecord(id) {
+      records = records.filter(r => r.id !== id);
+      setStored(STORAGE_KEY, records);
+      renderLedger();
+      tick();
+    }
+
+    function resetAll() {
+      if (confirm("Reset everything including the 10-day timer and records?")) {
+        try {
+          localStorage.removeItem(STORAGE_KEY);
+          localStorage.removeItem(WAITING_KEY);
+        } catch (e) {}
+        location.reload();
+      }
+    }
+
+    function renderLedger() {
+      const box = document.getElementById('ledger-list');
+      if (!box) return;
+      if (records.length === 0) {
+        box.innerHTML = `<div style="text-align:center; padding:10px; font-size:0.7rem; color:var(--muted)">No transactions recorded yet.</div>`;
+        return;
+      }
+      box.innerHTML = records.slice(0, 10).map(r => `
+        <div class="item">
+          <div>
+            <div style="font-weight:600;">+₹${r.income.toLocaleString('en-IN')} <span style="color:var(--muted); font-size:0.65rem;">(Exp: ₹${r.expense.toLocaleString('en-IN')})</span></div>
+            <div style="color:var(--muted); font-size:0.62rem;">${r.date}</div>
+          </div>
+          <div style="display:flex; align-items:center; gap:6px;">
+            <b style="color:${r.net >= 0 ? 'var(--green)' : 'var(--red)'};">${r.net >= 0 ? '+' : ''}₹${r.net.toLocaleString('en-IN')}</b>
+            <button class="del-btn" onclick="deleteRecord(${r.id})">✕</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function exportCSV() {
+      if (records.length === 0) return alert("No transactions to export.");
+      let csv = "Date,Gross_Income,Daily_Expense,Net_Savings\n";
+      records.forEach(r => {
+        csv += `${r.date},${r.income},${r.expense},${r.net}\n`;
+      });
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Mission_2030_Ledger_${new Date().toISOString().split('T')[0]}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+
+    setInterval(tick, 1000);
+    renderLedger();
+    tick();
+  </script>
